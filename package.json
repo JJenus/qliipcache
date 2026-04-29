@@ -11,8 +11,10 @@
     "typecheck": "nuxt typecheck"
   },
   "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
     "@iconify-json/lucide": "^1.2.104",
     "@iconify-json/simple-icons": "^1.2.80",
+    "@mrnima/tiktok-downloader": "^1.0.0",
     "@nuxt/ui": "^4.7.0",
     "nuxt": "^4.4.2",
     "tailwindcss": "^4.2.4"

@@ -45,10 +45,12 @@ const platformConfig: Record<string, { icon: string; color: string; label: strin
   instagram: { icon: 'i-simple-icons-instagram', color: '#E1306C', label: 'Instagram', bg: 'rgba(225,48,108,0.12)' },
   facebook: { icon: 'i-simple-icons-facebook', color: '#1877F2', label: 'Facebook', bg: 'rgba(24,119,242,0.12)' },
   twitter: { icon: 'i-simple-icons-x', color: '#ffffff', label: 'X / Twitter', bg: 'rgba(255,255,255,0.08)' },
+  tiktok: { icon: 'i-simple-icons-tiktok', color: '#69C9D0', label: 'TikTok', bg: 'rgba(105,201,208,0.12)' },
 }
 
 const supportedPlatforms = [
   { key: 'youtube', icon: 'i-simple-icons-youtube', color: '#FF0000', label: 'YouTube' },
+  { key: 'tiktok', icon: 'i-simple-icons-tiktok', color: '#69C9D0', label: 'TikTok' },
   { key: 'instagram', icon: 'i-simple-icons-instagram', color: '#E1306C', label: 'Instagram' },
   { key: 'facebook', icon: 'i-simple-icons-facebook', color: '#1877F2', label: 'Facebook' },
   { key: 'twitter', icon: 'i-simple-icons-x', color: '#ffffff', label: 'X / Twitter' },
@@ -56,10 +58,11 @@ const supportedPlatforms = [
 
 const detectedPlatform = computed(() => {
   const v = url.value
-  if (/(?:youtube\.com\/(?:watch\?.*v=|shorts\/|embed\/)|youtu\.be\/)/i.test(v)) return 'youtube'
+  if (/(?:youtube\.com\/(?:watch\?.*v=|shorts\/|embed\/|live\/)|youtu\.be\/)/i.test(v)) return 'youtube'
   if (/instagram\.com\/(?:p|reel|tv)\//i.test(v)) return 'instagram'
   if (/(?:facebook\.com|fb\.watch)\/(?:watch|video|reel|\d)/i.test(v)) return 'facebook'
   if (/(?:twitter\.com|x\.com)\/\w+\/status\//i.test(v)) return 'twitter'
+  if (/(?:tiktok\.com\/@[\w.]+\/video\/|vm\.tiktok\.com\/|vt\.tiktok\.com\/)/i.test(v)) return 'tiktok'
   return null
 })
 
@@ -101,22 +104,23 @@ async function fetchVideo(): Promise<void> {
       body: { url: url.value.trim() },
     })
     videoInfo.value = data
-  } catch (err: any) {
-    error.value = err?.data?.message || err?.message || 'Something went wrong. Please try again.'
-  } finally {
+  }
+  catch (err: unknown) {
+    const e = err as { data?: { message?: string }; message?: string }
+    error.value = e?.data?.message || e?.message || 'Something went wrong. Please try again.'
+  }
+  finally {
     loading.value = false
   }
 }
 
 async function downloadFormat(format: VideoFormat): Promise<void> {
   downloadingId.value = format.id
-
   try {
     window.open(format.url, '_blank')
-  } finally {
-    setTimeout(() => {
-      downloadingId.value = null
-    }, 1500)
+  }
+  finally {
+    setTimeout(() => { downloadingId.value = null }, 1500)
   }
 }
 
@@ -128,28 +132,22 @@ function reset(): void {
 
 function pasteFromClipboard(): void {
   navigator.clipboard.readText()
-    .then(text => {
-      if (text) url.value = text
-    })
+    .then(text => { if (text) url.value = text })
     .catch(() => {})
 }
 
 function handleKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Enter') {
-    fetchVideo()
-  }
+  if (event.key === 'Enter') fetchVideo()
 }
 </script>
 
 <template>
   <div class="min-h-screen w-full overflow-x-hidden bg-[#080810] font-['DM_Sans'] text-slate-200">
-    <!-- Ambient background effect -->
+    <!-- Ambient background -->
     <div class="fixed inset-0 pointer-events-none overflow-hidden">
       <div class="absolute rounded-full blur-3xl opacity-20 -top-[200px] left-1/2 -translate-x-1/2 bg-gradient-radial from-cyan-400 to-transparent w-[min(600px,100vw)] h-[min(600px,100vw)]" />
       <div class="absolute rounded-full blur-3xl opacity-10 bottom-[100px] -right-[100px] bg-gradient-radial from-violet-600 to-transparent w-[min(400px,80vw)] h-[min(400px,80vw)]" />
     </div>
-
-    <!-- Grid texture overlay -->
     <div class="fixed inset-0 pointer-events-none opacity-[0.03] bg-grid-pattern" />
 
     <div class="relative z-10 max-w-3xl mx-auto px-4 sm:px-6 py-8 sm:py-12 md:py-20">
@@ -159,7 +157,6 @@ function handleKeydown(event: KeyboardEvent): void {
           <span class="w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full bg-current animate-pulse" />
           FREE · NO WATERMARKS · NO SIGNUP
         </div>
-
         <h1 class="text-5xl sm:text-7xl md:text-8xl mb-2 sm:mb-3 leading-none tracking-wider px-2 font-['Bebas_Neue'] bg-gradient-to-r from-white via-cyan-400 to-cyan-600 bg-clip-text text-transparent">
           QliipCache
         </h1>
@@ -176,7 +173,6 @@ function handleKeydown(event: KeyboardEvent): void {
           class="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1 sm:py-1.5 rounded-full text-[10px] sm:text-xs font-medium transition-all"
           :class="[
             detectedPlatform === platform.key ? 'scale-105' : 'opacity-50',
-            detectedPlatform === platform.key ? `shadow-sm` : ''
           ]"
           :style="{
             background: detectedPlatform === platform.key ? `${platform.color}22` : 'rgba(255,255,255,0.04)',
@@ -197,15 +193,13 @@ function handleKeydown(event: KeyboardEvent): void {
             PASTE VIDEO URL
           </label>
 
-          <!-- Input group - column on mobile, row on tablet+ -->
           <div class="flex flex-col sm:flex-row gap-2 sm:gap-3">
             <div class="relative flex-1">
               <input
                 v-model="url"
                 type="url"
-                placeholder="https://youtube.com/watch?v=... or instagram.com/reel/..."
-                class="w-full rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm outline-none transition-all bg-white/5 border border-white/10 text-slate-200 font-['JetBrains_Mono'] placeholder:text-slate-700 focus:border-cyan-400/40"
-                :class="url ? 'pr-20 sm:pr-24' : 'pr-20 sm:pr-24'"
+                placeholder="YouTube, TikTok, Instagram, Facebook, X..."
+                class="w-full rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm outline-none transition-all bg-white/5 border border-white/10 text-slate-200 font-['JetBrains_Mono'] placeholder:text-slate-700 focus:border-cyan-400/40 pr-20 sm:pr-24"
                 :style="url ? { borderColor: 'rgba(0, 229, 255, 0.3)' } : {}"
                 @keydown="handleKeydown"
               />
@@ -238,7 +232,8 @@ function handleKeydown(event: KeyboardEvent): void {
             <button
               v-for="example in [
                 { label: 'YouTube', url: 'https://youtube.com/watch?v=dQw4w9WgXcQ' },
-                { label: 'Shorts', url: 'https://youtube.com/shorts/...' },
+                { label: 'TikTok', url: 'https://tiktok.com/@user/video/...' },
+                { label: 'Instagram', url: 'https://instagram.com/reel/...' },
               ]"
               :key="example.label"
               class="text-[10px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded transition-all hover:opacity-100 opacity-40 whitespace-nowrap bg-white/5 border border-white/10 text-slate-400 font-['JetBrains_Mono']"
@@ -262,8 +257,12 @@ function handleKeydown(event: KeyboardEvent): void {
         >
           <UIcon name="i-heroicons-exclamation-triangle" class="w-4 h-4 sm:w-5 sm:h-5 flex-shrink-0 mt-0.5 text-red-500" />
           <div class="flex-1">
-            <p class="text-xs sm:text-sm font-medium mb-0.5 sm:mb-1 text-red-300">Error</p>
-            <p class="text-xs sm:text-sm text-slate-400">{{ error }}</p>
+            <p class="text-xs sm:text-sm font-medium mb-0.5 sm:mb-1 text-red-300">
+              Error
+            </p>
+            <p class="text-xs sm:text-sm text-slate-400">
+              {{ error }}
+            </p>
           </div>
           <button class="ml-auto opacity-50 hover:opacity-100 flex-shrink-0" @click="error = null">
             <UIcon name="i-heroicons-x-mark" class="w-4 h-4 text-slate-400" />
@@ -308,18 +307,17 @@ function handleKeydown(event: KeyboardEvent): void {
 
           <!-- Thumbnail + Info -->
           <div class="p-3 sm:p-5">
-            <!-- Stack on mobile, row on tablet+ -->
             <div class="flex flex-col sm:flex-row gap-3 sm:gap-4 mb-4 sm:mb-5">
               <!-- Thumbnail -->
               <div
                 v-if="videoInfo.thumbnail"
-                class="rounded-xl overflow-hidden w-full sm:w-[140px] h-[180px] sm:h-[90px] bg-slate-800"
+                class="rounded-xl overflow-hidden w-full sm:w-[140px] h-[180px] sm:h-[90px] bg-slate-800 flex-shrink-0"
               >
                 <img :src="videoInfo.thumbnail" :alt="videoInfo.title" class="w-full h-full object-cover" />
               </div>
               <div
                 v-else
-                class="rounded-xl flex items-center justify-center w-full sm:w-[140px] h-[180px] sm:h-[90px] bg-slate-800 border border-white/5"
+                class="rounded-xl flex items-center justify-center w-full sm:w-[140px] h-[180px] sm:h-[90px] bg-slate-800 border border-white/5 flex-shrink-0"
               >
                 <UIcon name="i-heroicons-film" class="w-10 h-10 sm:w-8 sm:h-8 text-slate-700" />
               </div>
@@ -360,14 +358,12 @@ function handleKeydown(event: KeyboardEvent): void {
                 <div
                   v-for="format in videoInfo.formats"
                   :key="format.id"
-                  class="flex flex-col sm:flex-row items-start sm:items-center justify-between rounded-xl px-3 sm:px-4 py-3 transition-all group gap-3 sm:gap-2 bg-white/5 border border-white/5 hover:border-cyan-400/20 cursor-pointer"
+                  class="flex flex-col sm:flex-row items-start sm:items-center justify-between rounded-xl px-3 sm:px-4 py-3 transition-all group gap-3 sm:gap-2 bg-white/5 border border-white/5 hover:border-cyan-400/20"
                 >
                   <div class="flex items-center gap-3 w-full sm:w-auto">
-                    <!-- Format type icon -->
                     <div
-                      class="w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                      class="w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center flex-shrink-0 border"
                       :class="format.type === 'video' ? 'bg-cyan-400/10 border-cyan-400/20' : 'bg-violet-500/10 border-violet-500/20'"
-                      :style="{ border: `1px solid ${format.type === 'video' ? 'rgba(0, 229, 255, 0.2)' : 'rgba(139, 92, 246, 0.2)'}` }"
                     >
                       <UIcon
                         :name="format.type === 'video' ? 'i-heroicons-video-camera' : 'i-heroicons-musical-note'"
@@ -375,7 +371,6 @@ function handleKeydown(event: KeyboardEvent): void {
                         :class="format.type === 'video' ? 'text-cyan-400' : 'text-violet-400'"
                       />
                     </div>
-
                     <div>
                       <div class="flex items-center gap-2 flex-wrap">
                         <span class="text-xs sm:text-sm font-semibold text-slate-200">{{ format.label }}</span>
@@ -392,7 +387,9 @@ function handleKeydown(event: KeyboardEvent): void {
                   <button
                     :disabled="downloadingId !== null"
                     class="flex items-center gap-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all active:scale-95 disabled:opacity-60 w-full sm:w-auto justify-center"
-                    :class="downloadingId === format.id ? 'bg-cyan-400/10 text-cyan-400 border border-cyan-400/30' : 'bg-gradient-to-r from-cyan-400 to-cyan-600 text-[#080810] shadow-md hover:shadow-cyan-400/30'"
+                    :class="downloadingId === format.id
+                      ? 'bg-cyan-400/10 text-cyan-400 border border-cyan-400/30'
+                      : 'bg-gradient-to-r from-cyan-400 to-cyan-600 text-[#080810] shadow-md hover:shadow-cyan-400/30'"
                     @click="downloadFormat(format)"
                   >
                     <svg
@@ -422,7 +419,7 @@ function handleKeydown(event: KeyboardEvent): void {
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
           <div
             v-for="step in [
-              { icon: 'i-heroicons-clipboard-document', title: 'Paste URL', desc: 'Copy any video link from YouTube, Instagram, Facebook, or X' },
+              { icon: 'i-heroicons-clipboard-document', title: 'Paste URL', desc: 'Copy any video link from YouTube, TikTok, Instagram, Facebook, or X' },
               { icon: 'i-heroicons-magnifying-glass', title: 'Fetch Info', desc: 'We detect the platform and fetch all available quality options' },
               { icon: 'i-heroicons-arrow-down-tray', title: 'Download', desc: 'Choose your preferred quality and download instantly' },
             ]"
@@ -432,8 +429,12 @@ function handleKeydown(event: KeyboardEvent): void {
             <div class="w-8 h-8 sm:w-10 sm:h-10 rounded-xl flex items-center justify-center mx-auto mb-2 sm:mb-3 bg-cyan-400/10 border border-cyan-400/15">
               <UIcon :name="step.icon" class="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400" />
             </div>
-            <div class="text-xs sm:text-sm font-semibold mb-1 text-slate-200">{{ step.title }}</div>
-            <div class="text-[10px] sm:text-xs leading-relaxed text-slate-600">{{ step.desc }}</div>
+            <div class="text-xs sm:text-sm font-semibold mb-1 text-slate-200">
+              {{ step.title }}
+            </div>
+            <div class="text-[10px] sm:text-xs leading-relaxed text-slate-600">
+              {{ step.desc }}
+            </div>
           </div>
         </div>
       </div>
@@ -441,7 +442,7 @@ function handleKeydown(event: KeyboardEvent): void {
       <!-- Footer -->
       <div class="mt-10 sm:mt-14 text-center px-2">
         <p class="text-[9px] sm:text-xs font-mono text-slate-800 tracking-wider">
-          POWERED BY YT-DLP &nbsp;·&nbsp; FOR PERSONAL USE ONLY &nbsp;·&nbsp; RESPECT COPYRIGHT LAWS
+          FOR PERSONAL USE ONLY &nbsp;·&nbsp; RESPECT COPYRIGHT LAWS
         </p>
       </div>
     </div>
@@ -458,7 +459,6 @@ body {
   overflow-x: hidden;
 }
 
-/* Custom utilities */
 @layer utilities {
   .bg-gradient-radial {
     background-image: radial-gradient(var(--tw-gradient-stops));
@@ -472,31 +472,17 @@ body {
   }
 }
 
-/* Custom breakpoint for extra small screens */
 @media (min-width: 480px) {
-  .xs\:inline {
-    display: inline;
-  }
-  .xs\:hidden {
-    display: none;
-  }
+  .xs\:inline { display: inline; }
+  .xs\:hidden { display: none; }
 }
 
-.xs\:inline {
-  display: none;
-}
-
-.xs\:hidden {
-  display: inline;
-}
+.xs\:inline { display: none; }
+.xs\:hidden { display: inline; }
 
 @media (min-width: 480px) {
-  .xs\:inline {
-    display: inline;
-  }
-  .xs\:hidden {
-    display: none;
-  }
+  .xs\:inline { display: inline; }
+  .xs\:hidden { display: none; }
 }
 
 .line-clamp-2 {
@@ -506,34 +492,17 @@ body {
   overflow: hidden;
 }
 
-.scale-98 {
-  transform: scale(0.98);
-}
+.scale-98 { transform: scale(0.98); }
 
 @keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
-
-.animate-spin {
-  animation: spin 1s linear infinite;
-}
+.animate-spin { animation: spin 1s linear infinite; }
 
 @keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.3;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
-
-.animate-pulse {
-  animation: pulse 2s ease-in-out infinite;
-}
+.animate-pulse { animation: pulse 2s ease-in-out infinite; }
 </style>
