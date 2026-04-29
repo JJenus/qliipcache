@@ -1,38 +1,96 @@
-import ytdl from '@distube/ytdl-core'
+import { create as createYoutubeDl } from 'youtube-dl-exec'
+import { execSync } from 'child_process'
 
-// ─── Platform detection ────────────────────────────────────────────────────
-
-const PLATFORMS = {
-  youtube: /(?:youtube\.com\/(?:watch\?.*v=|shorts\/|embed\/|live\/)|youtu\.be\/)/i,
-  instagram: /instagram\.com\/(?:p|reel|tv)\//i,
-  facebook: /(?:facebook\.com|fb\.watch)\/(?:watch|video|reel|\d)/i,
-  twitter: /(?:twitter\.com|x\.com)\/\w+\/status\//i,
-  tiktok: /(?:tiktok\.com\/@[\w.]+\/video\/|vm\.tiktok\.com\/|vt\.tiktok\.com\/)/i,
-} as const
-
-type Platform = keyof typeof PLATFORMS
-
-function detectPlatform(url: string): Platform | null {
-  for (const [platform, regex] of Object.entries(PLATFORMS)) {
-    if (regex.test(url)) return platform as Platform
+// ─── Smart Binary Detection ─
+function getYoutubeDlInstance() {
+  // Try multiple methods in order of preference
+  
+  // Method 1: Check if system yt-dlp is available (Termux, Linux with pip install)
+  try {
+    execSync('which yt-dlp', { stdio: 'pipe' })
+    console.log('[SETUP] Using system yt-dlp from PATH')
+    return createYoutubeDl('yt-dlp')
+  } catch {
+    console.log('[SETUP] System yt-dlp not found in PATH')
   }
-  return null
+
+  // Method 2: Try youtube-dl-exec's bundled binary (production Linux)
+  try {
+    // Let youtube-dl-exec use its own binary discovery
+    console.log('[SETUP] Using youtube-dl-exec bundled binary')
+    return createYoutubeDl() // No path = use default discovery
+  } catch {
+    console.log('[SETUP] Failed to use youtube-dl-exec default binary')
+  }
+
+  // Method 3: Check common Linux paths
+  const commonPaths = [
+    '/usr/local/bin/yt-dlp',
+    '/usr/bin/yt-dlp',
+    '/opt/bin/yt-dlp',
+    './bin/yt-dlp',
+    './node_modules/youtube-dl-exec/bin/yt-dlp'
+  ]
+
+  for (const binaryPath of commonPaths) {
+    try {
+      execSync(`test -f "${binaryPath}" && test -x "${binaryPath}"`, { stdio: 'pipe' })
+      console.log(`[SETUP] Found yt-dlp at: ${binaryPath}`)
+      return createYoutubeDl(binaryPath)
+    } catch {
+      // Continue to next path
+    }
+  }
+
+  // Method 4: Last resort - download and use pip (for fresh Linux)
+  try {
+    console.log('[SETUP] Attempting to install yt-dlp via pip...')
+    execSync('pip install yt-dlp', { stdio: 'pipe' })
+    console.log('[SETUP] Successfully installed yt-dlp via pip')
+    return createYoutubeDl('yt-dlp')
+  } catch (pipError) {
+    console.error('[SETUP] Failed to install yt-dlp via pip:', pipError)
+  }
+
+  throw new Error(
+    'yt-dlp not found. Please install it:\n' +
+    '  Termux: pkg install yt-dlp\n' +
+    '  Ubuntu/Debian: sudo apt install yt-dlp\n' +
+    '  Or: pip install yt-dlp'
+  )
 }
 
-// ─── Response shape ────────────────────────────────────────────────────────
+// Initialize once at startup
+const youtubedl = getYoutubeDlInstance()
 
+// ─── Logger ─────────
+const logger = {
+  info: (m: string, d?: any) =>
+    console.log(`[${new Date().toISOString()}] [INFO] ${m}`, d ?? ""),
+  warn: (m: string, d?: any) =>
+    console.warn(`[${new Date().toISOString()}] [WARN] ${m}`, d ?? ""),
+  error: (m: string, d?: any) =>
+    console.error(`[${new Date().toISOString()}] [ERROR] ${m}`, d ?? ""),
+  debug: (m: string, d?: any) => {
+    if (process.env.NODE_ENV === "development") {
+      console.debug(`[DEBUG] ${m}`, d ?? "")
+    }
+  },
+}
+
+// ─── Types ─────────
 interface VideoFormat {
   id: string
   label: string
   ext: string
   filesize: number | null
   url: string
-  type: 'video' | 'audio'
+  type: "video" | "audio"
   height: number
 }
 
 interface VideoResponse {
-  platform: Platform
+  platform: string
   title: string
   thumbnail: string | null
   duration: number | null
@@ -41,279 +99,251 @@ interface VideoResponse {
   formats: VideoFormat[]
 }
 
-// ─── YouTube (via @distube/ytdl-core) ─────────────────────────────────────
+// ─── Platform Detection & Configuration ───────────────
+function detectPlatform(url: string): string {
+  const urlLower = url.toLowerCase()
+  if (urlLower.includes('youtube.com') || urlLower.includes('youtu.be')) return 'youtube'
+  if (urlLower.includes('tiktok.com')) return 'tiktok'
+  if (urlLower.includes('facebook.com') || urlLower.includes('fb.watch') || urlLower.includes('fb.com')) return 'facebook'
+  if (urlLower.includes('instagram.com')) return 'instagram'
+  if (urlLower.includes('twitter.com') || urlLower.includes('x.com')) return 'twitter'
+  return 'unknown'
+}
 
-async function fetchYouTube(url: string): Promise<VideoResponse> {
-  const info = await ytdl.getInfo(url)
-  const { videoDetails } = info
+function cleanUrl(url: string, platform: string): string {
+  try {
+    const urlObj = new URL(url)
+    
+    switch (platform) {
+      case 'tiktok':
+        return `https://www.tiktok.com${urlObj.pathname}`
+      
+      case 'instagram':
+        return `https://www.instagram.com${urlObj.pathname}`
+      
+      case 'facebook':
+        if (urlObj.pathname.includes('/reel/')) {
+          return `https://www.facebook.com${urlObj.pathname.split('?')[0]}`
+        }
+        return `https://www.facebook.com${urlObj.pathname}`
+      
+      case 'twitter':
+        return `https://twitter.com${urlObj.pathname}`
+      
+      default:
+        return url
+    }
+  } catch {
+    return url
+  }
+}
 
+function getPlatformOptions(platform: string): any {
+  const baseOptions: any = {
+    dumpSingleJson: true,
+    noCheckCertificates: true,
+    noWarnings: true,
+  }
+
+  switch (platform) {
+    case 'youtube':
+      return {
+        ...baseOptions,
+        extractorArgs: 'youtube:player_client=android,ios',
+        preferFreeFormats: true,
+        youtubeSkipDashManifest: true,
+        addHeader: [
+          'User-Agent: Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Mobile Safari/537.36',
+          'Accept-Language: en-US,en;q=0.9',
+        ]
+      }
+
+    case 'tiktok':
+      return {
+        ...baseOptions,
+        extractorArgs: 'tiktok:api_hostname=api16-normal-c-useast1a.tiktokv.com;app_version=30.5.3;manifest_app_version=30.5.3',
+        addHeader: [
+          'User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+          'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language: en-US,en;q=0.9',
+          'Sec-Fetch-Dest: document',
+          'Sec-Fetch-Mode: navigate',
+          'Sec-Fetch-Site: none',
+        ]
+      }
+
+    case 'facebook':
+      return {
+        ...baseOptions,
+        addHeader: [
+          'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+          'Accept-Language: en-US,en;q=0.9',
+          'Cookie: sb=placeholder; datr=placeholder;',
+        ]
+      }
+
+    case 'instagram':
+      return {
+        ...baseOptions,
+        addHeader: [
+          'User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+          'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language: en-US,en;q=0.9',
+          'X-IG-App-ID: 936619743392459',
+        ]
+      }
+
+    case 'twitter':
+      return {
+        ...baseOptions,
+        addHeader: [
+          'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+          'Accept-Language: en-US,en;q=0.9',
+          'Authorization: Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA',
+        ]
+      }
+
+    default:
+      return {
+        ...baseOptions,
+        addHeader: [
+          'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
+        ]
+      }
+  }
+}
+
+// ─── Error mapping ─
+function mapError(message: string, platform: string): string {
+  const msg = message.toLowerCase()
+
+  if (msg.includes("private")) return "This content is private."
+  if (msg.includes("unavailable") || msg.includes("not found")) return "This content is unavailable or removed."
+  if (msg.includes("copyright")) return "This content is restricted due to copyright."
+  if (msg.includes("login") || msg.includes("sign in")) return "This content requires login and cannot be accessed."
+  if (msg.includes("geo") || msg.includes("region")) return "This content is not available in your region."
+  
+  if (platform === 'tiktok' && msg.includes('403')) return "TikTok blocked the request. The video might be private or region-restricted."
+  if (platform === 'instagram' && msg.includes('login')) return "Instagram requires login to view this content."
+  if (platform === 'twitter' && msg.includes('403')) return "Twitter/X blocked the request. The content might be private."
+
+  return "Unable to process this video. Please try another link."
+}
+
+// ─── Format optimizer ─────
+function mapFormats(formats: any[]): VideoFormat[] {
   const seen = new Set<string>()
-  const formats: VideoFormat[] = []
-
-  // Combined video+audio formats, sorted by resolution descending
-  const videoFormats = info.formats
-    .filter(f => f.hasVideo && f.hasAudio && f.url)
-    .sort((a, b) => (b.height ?? 0) - (a.height ?? 0))
-
-  for (const f of videoFormats) {
-    const label = f.height ? `${f.height}p` : (f.qualityLabel ?? f.quality)
-    if (seen.has(label)) continue
-    seen.add(label)
-    formats.push({
-      id: f.itag.toString(),
-      label,
-      ext: f.container ?? 'mp4',
-      filesize: f.contentLength ? Number(f.contentLength) : null,
-      url: f.url,
-      type: 'video',
-      height: f.height ?? 0,
+  return formats
+    .filter((f) => f.url && (f.vcodec !== "none" || f.acodec !== "none"))
+    .sort((a, b) => (b.height || 0) - (a.height || 0))
+    .map((f) => {
+      const label = f.height ? `${f.height}p` : f.format_note || f.format || "unknown"
+      if (seen.has(label)) return null
+      seen.add(label)
+      return {
+        id: String(f.format_id),
+        label,
+        ext: f.ext || "mp4",
+        filesize: f.filesize || f.filesize_approx || null,
+        url: f.url,
+        type: f.vcodec === "none" ? "audio" : "video",
+        height: f.height || 0,
+      }
     })
-    if (formats.length >= 5) break
-  }
-
-  // Best audio-only
-  const audioFormats = info.formats
-    .filter(f => !f.hasVideo && f.hasAudio && f.url)
-    .sort((a, b) => (b.audioBitrate ?? 0) - (a.audioBitrate ?? 0))
-
-  if (audioFormats.length > 0) {
-    const a = audioFormats[0]
-    formats.push({
-      id: a.itag.toString(),
-      label: `Audio ${a.audioBitrate ? Math.round(a.audioBitrate) + 'kbps' : 'only'}`,
-      ext: a.container ?? 'm4a',
-      filesize: a.contentLength ? Number(a.contentLength) : null,
-      url: a.url,
-      type: 'audio',
-      height: 0,
-    })
-  }
-
-  return {
-    platform: 'youtube',
-    title: videoDetails.title,
-    thumbnail: videoDetails.thumbnails.at(-1)?.url ?? null,
-    duration: Number(videoDetails.lengthSeconds) || null,
-    uploader: videoDetails.author.name ?? null,
-    viewCount: Number(videoDetails.viewCount) || null,
-    formats,
-  }
+    .filter(Boolean)
+    .slice(0, 6) as VideoFormat[]
 }
 
-// ─── TikTok (via @mrnima/tiktok-downloader) ───────────────────────────────
-
-async function fetchTikTok(url: string): Promise<VideoResponse> {
-  // Dynamic import — package uses CJS default export
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const downloader = await import('@mrnima/tiktok-downloader')
-  const dl = downloader.default ?? downloader
-
-  // The package accepts a TikTok URL and returns media data
-  const result = await dl.Tiktok(url)
-
-  if (!result || result.status !== 'success') {
-    throw new Error('Could not fetch TikTok video. The video may be private or unavailable.')
-  }
-
-  const data = result.result
-  const formats: VideoFormat[] = []
-
-  // No-watermark video (preferred)
-  if (data?.video?.nowm) {
-    formats.push({
-      id: 'nowm',
-      label: 'No Watermark',
-      ext: 'mp4',
-      filesize: null,
-      url: data.video.nowm,
-      type: 'video',
-      height: 0,
-    })
-  }
-
-  // With-watermark video (fallback)
-  if (data?.video?.wm) {
-    formats.push({
-      id: 'wm',
-      label: 'With Watermark',
-      ext: 'mp4',
-      filesize: null,
-      url: data.video.wm,
-      type: 'video',
-      height: 0,
-    })
-  }
-
-  // Audio
-  if (data?.music) {
-    formats.push({
-      id: 'audio',
-      label: 'Audio',
-      ext: 'mp3',
-      filesize: null,
-      url: data.music,
-      type: 'audio',
-      height: 0,
-    })
-  }
-
-  return {
-    platform: 'tiktok',
-    title: data?.title ?? 'TikTok Video',
-    thumbnail: data?.thumbnail ?? null,
-    duration: null,
-    uploader: data?.author?.nickname ?? null,
-    viewCount: null,
-    formats,
-  }
-}
-
-// ─── Instagram / Facebook / X/Twitter (via Cobalt API) ───────────────────
-//
-//   Cobalt is a free, open-source, no-key-required video download API.
-//   Docs: https://cobalt.tools / https://github.com/imputnet/cobalt
-//   Instance used: api.cobalt.tools  (official public instance)
-//
-
-async function fetchViaCobalt(
-  url: string,
-  platform: 'instagram' | 'facebook' | 'twitter',
-): Promise<VideoResponse> {
-  // Step 1: Ask Cobalt for the download stream/URL
-  const cobaltRes = await $fetch<{
-    status: string
-    url?: string
-    urls?: string[]
-    filename?: string
-    error?: { code: string; context?: Record<string, unknown> }
-    picker?: Array<{ type: string; url: string; thumb?: string }>
-  }>('https://api.cobalt.tools/', {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: {
-      url,
-      videoQuality: '1080',
-      audioFormat: 'mp3',
-      filenameStyle: 'pretty',
-    },
+// ─── Core fetcher ─
+async function fetchVideo(url: string): Promise<VideoResponse> {
+  const platform = detectPlatform(url)
+  const cleanVideoUrl = cleanUrl(url, platform)
+  
+  logger.info(`Processing ${platform} video`, { 
+    original: url.substring(0, 100),
+    cleaned: cleanVideoUrl 
   })
 
-  if (cobaltRes.status === 'error') {
-    const code = cobaltRes.error?.code ?? 'unknown'
-    if (code.includes('content.unavailable') || code.includes('fetch.fail')) {
-      throw new Error('This video is unavailable, private, or region-locked.')
-    }
-    if (code.includes('link.unsupported')) {
-      throw new Error('This URL is not supported.')
-    }
-    throw new Error(`Could not fetch video (${code}).`)
-  }
+  try {
+    const options = getPlatformOptions(platform)
+    const data = await youtubedl(cleanVideoUrl, options)
 
-  const formats: VideoFormat[] = []
-
-  // Cobalt returns either a single `url` or a `picker` array (for multi-item posts)
-  if (cobaltRes.status === 'stream' || cobaltRes.status === 'redirect') {
-    if (cobaltRes.url) {
-      formats.push({
-        id: 'best',
-        label: 'Best Quality',
-        ext: 'mp4',
-        filesize: null,
-        url: cobaltRes.url,
-        type: 'video',
-        height: 0,
-      })
-    }
-  }
-  else if (cobaltRes.status === 'picker' && cobaltRes.picker) {
-    cobaltRes.picker.forEach((item, idx) => {
-      formats.push({
-        id: `pick-${idx}`,
-        label: item.type === 'video' ? `Video ${idx + 1}` : `Image ${idx + 1}`,
-        ext: item.type === 'video' ? 'mp4' : 'jpg',
-        filesize: null,
-        url: item.url,
-        type: 'video',
-        height: 0,
-      })
+    logger.debug("yt-dlp response received", {
+      title: data.title,
+      formats: data.formats?.length,
     })
-  }
 
-  // Cobalt doesn't return metadata — build a minimal but clean response
-  const platformLabels: Record<string, string> = {
-    instagram: 'Instagram',
-    facebook: 'Facebook',
-    twitter: 'X / Twitter',
-  }
+    const formats = mapFormats(data.formats || [])
 
-  return {
-    platform,
-    title: `${platformLabels[platform]} Video`,
-    thumbnail: cobaltRes.picker?.[0]?.thumb ?? null,
-    duration: null,
-    uploader: null,
-    viewCount: null,
-    formats,
+    if (!formats.length) {
+      throw new Error("No downloadable formats found.")
+    }
+
+    return {
+      platform: data.extractor || platform,
+      title: data.title,
+      thumbnail: data.thumbnail || null,
+      duration: data.duration || null,
+      uploader: data.uploader || null,
+      viewCount: data.view_count || null,
+      formats,
+    }
+  } catch (err: any) {
+    logger.error(`Failed to fetch ${platform} video`, {
+      error: err?.message || err,
+      stderr: err?.stderr?.substring(0, 200),
+    })
+    throw new Error(mapError(err?.stderr || err?.message || "Failed to fetch video information", platform))
   }
 }
 
-// ─── Main handler ──────────────────────────────────────────────────────────
-
+// ─── Handler ──────
 export default defineEventHandler(async (event) => {
-  const body = await readBody(event)
-  const { url } = body
-
-  if (!url || typeof url !== 'string') {
-    throw createError({ statusCode: 400, message: 'URL is required.' })
-  }
-
-  const trimmed = url.trim()
-  const platform = detectPlatform(trimmed)
-
-  if (!platform) {
-    throw createError({
-      statusCode: 400,
-      message: 'Unsupported platform. Paste a YouTube, TikTok, Instagram, Facebook, or X/Twitter link.',
-    })
-  }
-
+  const start = Date.now()
   try {
-    switch (platform) {
-      case 'youtube':
-        return await fetchYouTube(trimmed)
-
-      case 'tiktok':
-        return await fetchTikTok(trimmed)
-
-      case 'instagram':
-      case 'facebook':
-      case 'twitter':
-        return await fetchViaCobalt(trimmed, platform)
-    }
-  }
-  catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e)
-
-    // Surface known user-facing messages directly
-    if (
-      msg.includes('private')
-      || msg.includes('unavailable')
-      || msg.includes('region-locked')
-      || msg.includes('not supported')
-      || msg.includes('login')
-      || msg.includes('Sign in')
-    ) {
-      throw createError({ statusCode: 403, message: msg })
+    const body = await readBody(event)
+    const url = body?.url?.trim()
+    
+    if (!url) {
+      throw createError({
+        statusCode: 400,
+        message: "Please provide a valid URL.",
+      })
     }
 
-    // Unexpected errors — give a generic but clean message
-    console.error(`[QliipCache] ${platform} fetch error:`, msg)
+    // Basic URL validation
+    const validDomains = ['youtube.com', 'youtu.be', 'tiktok.com', 'facebook.com', 'fb.watch', 'instagram.com', 'twitter.com', 'x.com']
+    const isValidDomain = validDomains.some(domain => url.toLowerCase().includes(domain))
+    
+    if (!isValidDomain) {
+      throw createError({
+        statusCode: 400,
+        message: "Unsupported URL. Please provide a link from YouTube, TikTok, Facebook, Instagram, or Twitter/X.",
+      })
+    }
+
+    logger.info("Processing request", { url: url.substring(0, 100) })
+    const result = await fetchVideo(url)
+    
+    logger.info("Success", {
+      platform: result.platform,
+      title: result.title,
+      formats: result.formats.length,
+      durationMs: Date.now() - start,
+    })
+    
+    return result
+  } catch (e: any) {
+    const msg = e?.message || "Unexpected error"
+    
+    logger.error("Request failed", {
+      error: msg,
+      durationMs: Date.now() - start,
+    })
+
     throw createError({
-      statusCode: 500,
-      message: 'Could not fetch video info. The video may be private, region-locked, or the URL may be invalid.',
+      statusCode: e.statusCode || 500,
+      message: msg,
     })
   }
 })
